@@ -4,7 +4,7 @@
 // @homepage     https://github.com/Justleen/paste_sanitizer
 // @homepageURL  https://github.com/Justleen/paste_sanitizer
 // @supportURL   https://github.com/Justleen/paste_sanitizer/issues
-// @version      1.8.2
+// @version      1.8.3
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
@@ -42,7 +42,6 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     notify: true,
     detectIP: true,
     detectFQDN: true,
-    fqdnDummy: 'example.com',
     fqdnNumbered: true,
     detectUser: true,
     detectPass: true,
@@ -178,7 +177,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
   const LOOKS_LIKE_IP = /^(?:\[.*\]|\d{1,3}(?:\.\d{1,3}){3})$/;
 
   function domainMapper(o) {
-    const dummy = (o.fqdnDummy || 'example.com').trim().toLowerCase();
+    const dummy = 'example.com'; // reserved for examples (RFC 2606)
     const seen = new Map();
     const isDummy = (d) => d === dummy || d.endsWith('.' + dummy);
     return {
@@ -307,7 +306,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
   }
   const currentBuiltinOpts = () => ({
     detectIP: get('detectIP'), detectUser: get('detectUser'), detectPass: get('detectPass'), detectKeys: get('detectKeys'), dictDomains: get('dictDomains'),
-    detectFQDN: get('detectFQDN'), fqdnDummy: get('fqdnDummy'), fqdnNumbered: get('fqdnNumbered'),
+    detectFQDN: get('detectFQDN'), fqdnNumbered: get('fqdnNumbered'),
   });
 
   // Keyword & domain rules first (your exact values win), then built-in detectors, then regex rules
@@ -532,10 +531,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
     textarea { width: 100%; font: 12.5px/1.5 ui-monospace, Menlo, Consolas, monospace;
       border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 10px; resize: vertical; color: #111827; background: #fff; }
-    .inline { display: inline-flex; gap: 6px; align-items: center; }
-    input[type=text] { font: 12.5px ui-monospace, Menlo, Consolas, monospace; padding: 3px 7px; width: 170px;
-      border: 1px solid #d1d5db; border-radius: 6px; color: #111827; background: #fff; }
-    input[type=text]:focus, textarea:focus { outline: 2px solid #2563eb; outline-offset: -1px; }
+    textarea:focus { outline: 2px solid #2563eb; outline-offset: -1px; }
     .rules { height: 340px; }
     .err { color: #b91c1c; font-size: 12.5px; white-space: pre-wrap; min-height: 1em; margin-top: 4px; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -571,8 +567,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     const userCb = cb('detectUser', 'Usernames → USERNAME');
     const passCb = cb('detectPass', 'Passwords → PASSWD');
     const keysCb = cb('detectKeys', 'SSH keys & certificates → SSHKEY / PRIVKEY / SSLCERT');
-    const fqdnCb = cb('detectFQDN', 'Domains / FQDNs →');
-    const fqdnIn = h('input', { type: 'text', value: get('fqdnDummy'), spellcheck: false, placeholder: 'example.com' });
+    const fqdnCb = cb('detectFQDN', 'Domains / FQDNs → host1.example.com');
     const numCb = cb('fqdnNumbered', 'Number different domains (host1, host2, …)');
     const siteCb = cb(null, `Enabled on ${host || 'this page'}`, enabledHere());
 
@@ -582,7 +577,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       const rules = orderRules(parsed.rules, builtinRules({
         detectIP: ipCb.input.checked, detectUser: userCb.input.checked, detectPass: passCb.input.checked,
         detectKeys: keysCb.input.checked,
-        detectFQDN: fqdnCb.input.checked, fqdnDummy: fqdnIn.value, fqdnNumbered: numCb.input.checked,
+        detectFQDN: fqdnCb.input.checked, fqdnNumbered: numCb.input.checked,
       }), domCb.input.checked);
       errBox.textContent = errors.join('\n');
       const { text, count } = sanitize(testIn.value, rules);
@@ -593,7 +588,6 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     }
     rulesTa.addEventListener('input', refresh);
     for (const c of [domCb, ipCb, userCb, passCb, keysCb, fqdnCb, numCb]) c.input.addEventListener('change', refresh);
-    fqdnIn.addEventListener('input', refresh);
     testIn.addEventListener('input', refresh);
 
     function save() {
@@ -605,7 +599,6 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       set('detectPass', passCb.input.checked);
       set('detectKeys', keysCb.input.checked);
       set('detectFQDN', fqdnCb.input.checked);
-      set('fqdnDummy', fqdnIn.value.trim() || 'example.com');
       set('fqdnNumbered', numCb.input.checked);
       const hosts = new Set(get('disabledHosts'));
       siteCb.input.checked ? hosts.delete(host) : hosts.add(host);
@@ -620,7 +613,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       h('h3', {}, 'Built-in detectors'),
       h('div', { className: 'opts' }, ipCb.el, userCb.el, passCb.el, keysCb.el),
       h('div', { className: 'opts', style: 'margin-top:6px' },
-        h('span', { className: 'inline' }, fqdnCb.el, fqdnIn), numCb.el),
+        fqdnCb.el, numCb.el),
       h('h3', {}, 'Dictionary'),
       rulesTa,
       errBox,
