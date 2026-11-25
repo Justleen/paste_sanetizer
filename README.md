@@ -23,12 +23,16 @@ Each one can be switched off in settings. They run after your keyword rules and 
 | Passwords | `password=hunter2`, `--password "x"`, `curl -u bob:pw` | `password=PASSWD`, `--password "PASSWD"`, `curl -u USERNAME:PASSWD` |
 | Credentials in URLs | `postgres://u:p@db/app` | `postgres://USERNAME:PASSWD@host1.example.com/app` |
 | Domains / FQDNs | `https://portal.acme.nl/x`, `server01.corp.acme.com` | `https://host1.example.com/x`, `host2.example.com` |
+| Certificates & private keys (any PEM block) | `-----BEGIN CERTIFICATE-----` + base64 + `-----END CERTIFICATE-----` | `-----BEGIN CERTIFICATE-----` / `SSLCERT` / `-----END CERTIFICATE-----` |
+| SSH public keys | `ssh-ed25519 AAAAC3Nz… john@laptop` | `ssh-ed25519 SSHKEY USERNAME@laptop` |
+| Key fingerprints | `SHA256:o1IaThkt…`, `MD5:12:9e:8a:…` | `KEYFP` |
 
 Notes:
 
 - Usernames and passwords are only found **next to a label** (`password=`, `"user":`, `--password`, `-u`, `user:pass@`, `ssh user@`). A password on its own, like `hunter2`, can't be told apart from a normal word. Add known secrets to the dictionary instead.
 - Domain names in links are always replaced. Bare domains in text are only replaced when they end in a known TLD (`.com`, `.nl`, `.io`, `.local`, `.internal`, …), so code like `window.location` or `setup.py` stays untouched. Endings that double as file extensions (`.sh`, `.py`, `.md`, `.pl`, `.rs`, …) are skipped in plain text.
 - The dummy domain is configurable (default `example.com`). Different domains are numbered `host1`, `host2`, … so you can still see which lines belong together.
+- Key and certificate blocks keep their `BEGIN`/`END` lines so you can still see what was pasted. The body becomes `PRIVKEY` (any private key, incl. OpenSSH, RSA, EC, PKCS#8 and PGP), `SSLCERT` (certificates and CRLs), `PUBKEY` or `PEMDATA` (anything else, e.g. a CSR). Blocks cut off before the `END` line and JSON-escaped blocks (`\n`) are handled too, as are PuTTY `.ppk` files.
 - Version numbers with four parts (`1.2.3.4`) look like IPs and will be replaced.
 
 ## Dictionary format
@@ -52,7 +56,7 @@ secret-word =>
 ### Order
 
 1. **Keyword rules** (`find => replace`, `a | b => x`): your exact values win, so `john.doe@acme.com => [ME]` is applied before the domain detector can touch the email address.
-2. **Built-in detectors**: IP, username, password, domain.
+2. **Built-in detectors**: keys and certificates first, then username, password, domain and IP.
 3. **Regex rules** (`/pattern/ => x`): catch-alls like `[EMAIL]` mop up whatever is left.
 
 Within each group, rules run top to bottom.

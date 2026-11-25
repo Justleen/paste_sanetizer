@@ -3,7 +3,7 @@
 // @namespace    https://github.com/Justleen/paste_sanetizer
 // @homepageURL  https://github.com/Justleen/paste_sanitizer
 // @supportURL   https://github.com/Justleen/paste_sanitizer/issues
-// @version      1.6.0
+// @version      1.7.0
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
@@ -42,6 +42,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     fqdnNumbered: true,
     detectUser: true,
     detectPass: true,
+    detectKeys: true,
     disabledHosts: [],
   };
 
@@ -195,8 +196,60 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     ];
   }
 
+
+  // ---- SSH keys, certificates & other PEM blocks ------------------------------
+  const pemToken = (label) => {
+    const l = label.toUpperCase();
+    if (/PRIVATE KEY/.test(l)) return 'PRIVKEY';
+    if (/CERTIFICATE|X509 CRL|TRUSTED/.test(l)) return 'SSLCERT';
+    if (/PUBLIC KEY/.test(l)) return 'PUBKEY';
+    return 'PEMDATA';
+  };
+  const SSH_KEY_TYPES =
+    'ssh-rsa|ssh-dss|ssh-ed25519|ssh-ed448|ecdsa-sha2-nistp(?:256|384|521)|' +
+    'sk-ssh-ed25519@openssh\\.com|sk-ecdsa-sha2-nistp256@openssh\\.com|' +
+    '(?:ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521))-cert-v01@openssh\\.com';
+
+  function keyRules() {
+    return [
+      { // complete PEM block: -----BEGIN X----- ... -----END X----- (also with literal \n, as in JSON)
+        type: 'fn',
+        re: /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g,
+        fn: (m, label) => {
+          const nl = /\r?\n/.test(m) ? '\n' : '\\n'; // keep JSON-escaped blocks escaped
+          return `-----BEGIN ${label}-----${nl}${pemToken(label)}${nl}-----END ${label}-----`;
+        },
+      },
+      { // truncated PEM block (BEGIN line + base64/header lines, no END)
+        type: 'fn',
+        // skips blocks already handled above; eats base64 lines and "Header: value" lines only
+        re: /-----BEGIN ([A-Z0-9 ]+)-----(?![ \t]*(?:\r?\n|\\n)(?:PRIVKEY|SSLCERT|PUBKEY|PEMDATA)\b)(?:[ \t]*(?:\r?\n|\\n)[ \t]*(?:[A-Za-z0-9+\/=]{4,}|[A-Za-z][\w-]*:[^\n\\]*))+/g,
+        fn: (m, label) => {
+          const nl = /\r?\n/.test(m) ? '\n' : '\\n';
+          return `-----BEGIN ${label}-----${nl}${pemToken(label)}`;
+        },
+      },
+      { // OpenSSH public keys / authorized_keys / known_hosts lines
+        type: 'fn',
+        re: new RegExp(`\\b(${SSH_KEY_TYPES})(\\s+)AAAA[0-9A-Za-z+/]+={0,3}`, 'g'),
+        fn: (m, type, sp) => type + sp + 'SSHKEY',
+      },
+      { // PuTTY .ppk key data
+        type: 'fn',
+        re: /((?:Public|Private)-Lines:\s*\d+\r?\n)((?:[A-Za-z0-9+\/=]+(?:\r?\n|$))+)/g,
+        fn: (m, head, body) => head + (head.startsWith('Private') ? 'PRIVKEY' : 'SSHKEY') + '\n',
+      },
+      { type: 'regex', re: /\b(Private-MAC:\s*)[0-9a-f]+/gi, replace: '$1PRIVKEY' },
+      { // fingerprints: SHA256:base64 and legacy MD5 aa:bb:…
+        type: 'regex', re: /\b(?:SHA256|SHA1):[A-Za-z0-9+\/]{27,43}=?/g, replace: 'KEYFP',
+      },
+      { type: 'regex', re: /(?<![\w:])(?:MD5:)?(?:[0-9a-f]{2}:){15}[0-9a-f]{2}(?![\w:])/gi, replace: 'KEYFP' },
+    ];
+  }
+
   function builtinRules(o) {
     const r = [];
+    if (o.detectKeys) r.push(...keyRules()); // first: key data must not be picked apart by other detectors
     // scheme://user:pass@host
     if (o.detectUser || o.detectPass) {
       r.push({
@@ -234,7 +287,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     return r;
   }
   const currentBuiltinOpts = () => ({
-    detectIP: get('detectIP'), detectUser: get('detectUser'), detectPass: get('detectPass'),
+    detectIP: get('detectIP'), detectUser: get('detectUser'), detectPass: get('detectPass'), detectKeys: get('detectKeys'),
     detectFQDN: get('detectFQDN'), fqdnDummy: get('fqdnDummy'), fqdnNumbered: get('fqdnNumbered'),
   });
 
@@ -255,7 +308,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
   }
 
   const labelOf = (repl) => (repl || '').replace(/\$(\d+|&|<\w+>)/g, '').trim() || '(deleted)';
-  const TOKENS = ['IPADDR', 'USERNAME', 'PASSWD'];
+  const TOKENS = ['IPADDR', 'USERNAME', 'PASSWD', 'PRIVKEY', 'SSLCERT', 'PUBKEY', 'PEMDATA', 'SSHKEY', 'KEYFP'];
   const countIn = (str, tok) => str.split(tok).length - 1;
 
   function sanitize(input, rules = getRules()) {
@@ -493,6 +546,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     const ipCb = cb('detectIP', 'IP addresses → IPADDR');
     const userCb = cb('detectUser', 'Usernames → USERNAME');
     const passCb = cb('detectPass', 'Passwords → PASSWD');
+    const keysCb = cb('detectKeys', 'SSH keys & certificates → SSHKEY / PRIVKEY / SSLCERT');
     const fqdnCb = cb('detectFQDN', 'Domains / FQDNs →');
     const fqdnIn = h('input', { type: 'text', value: get('fqdnDummy'), spellcheck: false, placeholder: 'example.com' });
     const numCb = cb('fqdnNumbered', 'Number different domains (host1, host2, …)');
@@ -503,6 +557,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       const errors = parsed.errors;
       const rules = orderRules(parsed.rules, builtinRules({
         detectIP: ipCb.input.checked, detectUser: userCb.input.checked, detectPass: passCb.input.checked,
+        detectKeys: keysCb.input.checked,
         detectFQDN: fqdnCb.input.checked, fqdnDummy: fqdnIn.value, fqdnNumbered: numCb.input.checked,
       }));
       errBox.textContent = errors.join('\n');
@@ -513,7 +568,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
         : `${parsed.rules.length} dictionary rule(s) + built-in detectors`;
     }
     rulesTa.addEventListener('input', refresh);
-    for (const c of [ipCb, userCb, passCb, fqdnCb, numCb]) c.input.addEventListener('change', refresh);
+    for (const c of [ipCb, userCb, passCb, keysCb, fqdnCb, numCb]) c.input.addEventListener('change', refresh);
     fqdnIn.addEventListener('input', refresh);
     testIn.addEventListener('input', refresh);
 
@@ -523,6 +578,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       set('detectIP', ipCb.input.checked);
       set('detectUser', userCb.input.checked);
       set('detectPass', passCb.input.checked);
+      set('detectKeys', keysCb.input.checked);
       set('detectFQDN', fqdnCb.input.checked);
       set('fqdnDummy', fqdnIn.value.trim() || 'example.com');
       set('fqdnNumbered', numCb.input.checked);
@@ -537,7 +593,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       h('h2', {}, '🧼 Paste Sanitizer'),
       h('div', { className: 'opts' }, notifyCb.el, siteCb.el),
       h('h3', {}, 'Built-in detectors'),
-      h('div', { className: 'opts' }, ipCb.el, userCb.el, passCb.el),
+      h('div', { className: 'opts' }, ipCb.el, userCb.el, passCb.el, keysCb.el),
       h('div', { className: 'opts', style: 'margin-top:6px' },
         h('span', { className: 'inline' }, fqdnCb.el, fqdnIn), numCb.el),
       h('h3', {}, 'Dictionary'),
