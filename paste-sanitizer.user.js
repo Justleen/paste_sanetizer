@@ -3,7 +3,7 @@
 // @namespace    https://github.com/Justleen/paste_sanetizer
 // @homepageURL  https://github.com/Justleen/paste_sanitizer
 // @supportURL   https://github.com/Justleen/paste_sanitizer/issues
-// @version      1.6.0
+// @version      1.8.0
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
@@ -19,17 +19,21 @@
   // ---------------------------------------------------------------------------
   // Defaults
   // ---------------------------------------------------------------------------
-  const DEFAULT_RULES = `# One rule per line:   find => replace
-# Several keywords:     one | two | three => replace   (use \\| for a literal |)
-# Regex rule:           /pattern/flags => replace    ($1, $2 … for groups)
-# Empty right side deletes the match. \\n and \\t work in the replacement.
-# Lines starting with # are comments. Rules run top to bottom.
-# Order: keyword rules → built-in detectors (IP, user, password, domain) → regex rules.
+  const DEFAULT_RULES = `# Your own find & replace rules, one per line:
+#   find => replace                exact text, also inside longer words
+#   one | two | three => replace   several keywords for one replacement (\\| = a literal |)
+#   acme.nl | corp.acme => x       domain names also match subdomains (git.acme.nl), any case;
+#                                  switch "Domains in the dictionary" at the top turns them on/off
+#   /pattern/flags => replace      regex, replaces all matches ($1, $2 … for groups)
+#   find =>                        empty right side deletes the match
+# \\n and \\t work in the replacement. Lines starting with # are comments.
+# Order per paste: keyword & domain rules (longest keyword first) → keys & certificates →
+# username, password, domain and IP detectors → regex rules (top to bottom).
 
+acme.nl | acme-corp.com | intranet.acme => [DOMAIN]
 john.doe@acme.com | jdoe | John Doe => [ME]
 Acme Corp | Acme BV | ACME => [COMPANY]
 /\\b(?!(?:USERNAME|PASSWD)@)[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)*\\.[a-z]{2,}\\b/i => [EMAIL]
-/\\b[A-Z]{2}\\d{2}[A-Z0-9]{10,30}\\b/ => [IBAN]
 /(api[_-]?key\\s*[:=]\\s*)\\S+/i => $1[REDACTED]
 `;
 
@@ -42,6 +46,8 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     fqdnNumbered: true,
     detectUser: true,
     detectPass: true,
+    detectKeys: true,
+    dictDomains: true,
     disabledHosts: [],
   };
 
@@ -55,6 +61,20 @@ Acme Corp | Acme BV | ACME => [COMPANY]
   // ---------------------------------------------------------------------------
   const unescape = (s) =>
     (s || '').replace(/\\(n|t|\\)/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : '\\'));
+
+  // A keyword that is a domain name (acme.nl, *.corp.acme) also matches its subdomains,
+  // in any case, but only as a whole name: notacme.nl and acme.nl.evil.com are not hit.
+  const isDomainKeyword = (k) =>
+    /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+\.?$/i.test(k) &&
+    /[a-z]/i.test(k.split('.').filter(Boolean).pop()); // last label has a letter → not an IP / version
+  function domainRule(find, replace) {
+    const name = find.toLowerCase().replace(/^\*\./, '').replace(/\.$/, '');
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return {
+      type: 'domain', find: name, replace,
+      re: new RegExp(`(?<![\\w.-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)*${esc}(?![\\w-]|\\.[a-z0-9])`, 'gi'),
+    };
+  }
 
   function parseRules(text) {
     const rules = [];
@@ -83,7 +103,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
           .sort((a, b) => b.length - a.length);
         if (!keys.length) errors.push(`Line ${i + 1}: no keywords before "=>"`);
         const replace = unescape(lit[2]);
-        for (const find of keys) rules.push({ type: 'literal', find, replace });
+        for (const find of keys) rules.push(isDomainKeyword(find) ? domainRule(find, replace) : { type: 'literal', find, replace });
       } else {
         errors.push(`Line ${i + 1}: expected "find => replace"`);
       }
@@ -195,8 +215,60 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     ];
   }
 
+
+  // ---- SSH keys, certificates & other PEM blocks ------------------------------
+  const pemToken = (label) => {
+    const l = label.toUpperCase();
+    if (/PRIVATE KEY/.test(l)) return 'PRIVKEY';
+    if (/CERTIFICATE|X509 CRL|TRUSTED/.test(l)) return 'SSLCERT';
+    if (/PUBLIC KEY/.test(l)) return 'PUBKEY';
+    return 'PEMDATA';
+  };
+  const SSH_KEY_TYPES =
+    'ssh-rsa|ssh-dss|ssh-ed25519|ssh-ed448|ecdsa-sha2-nistp(?:256|384|521)|' +
+    'sk-ssh-ed25519@openssh\\.com|sk-ecdsa-sha2-nistp256@openssh\\.com|' +
+    '(?:ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521))-cert-v01@openssh\\.com';
+
+  function keyRules() {
+    return [
+      { // complete PEM block: -----BEGIN X----- ... -----END X----- (also with literal \n, as in JSON)
+        type: 'fn',
+        re: /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g,
+        fn: (m, label) => {
+          const nl = /\r?\n/.test(m) ? '\n' : '\\n'; // keep JSON-escaped blocks escaped
+          return `-----BEGIN ${label}-----${nl}${pemToken(label)}${nl}-----END ${label}-----`;
+        },
+      },
+      { // truncated PEM block (BEGIN line + base64/header lines, no END)
+        type: 'fn',
+        // skips blocks already handled above; eats base64 lines and "Header: value" lines only
+        re: /-----BEGIN ([A-Z0-9 ]+)-----(?![ \t]*(?:\r?\n|\\n)(?:PRIVKEY|SSLCERT|PUBKEY|PEMDATA)\b)(?:[ \t]*(?:\r?\n|\\n)[ \t]*(?:[A-Za-z0-9+\/=]{4,}|[A-Za-z][\w-]*:[^\n\\]*))+/g,
+        fn: (m, label) => {
+          const nl = /\r?\n/.test(m) ? '\n' : '\\n';
+          return `-----BEGIN ${label}-----${nl}${pemToken(label)}`;
+        },
+      },
+      { // OpenSSH public keys / authorized_keys / known_hosts lines
+        type: 'fn',
+        re: new RegExp(`\\b(${SSH_KEY_TYPES})(\\s+)AAAA[0-9A-Za-z+/]+={0,3}`, 'g'),
+        fn: (m, type, sp) => type + sp + 'SSHKEY',
+      },
+      { // PuTTY .ppk key data
+        type: 'fn',
+        re: /((?:Public|Private)-Lines:\s*\d+\r?\n)((?:[A-Za-z0-9+\/=]+(?:\r?\n|$))+)/g,
+        fn: (m, head, body) => head + (head.startsWith('Private') ? 'PRIVKEY' : 'SSHKEY') + '\n',
+      },
+      { type: 'regex', re: /\b(Private-MAC:\s*)[0-9a-f]+/gi, replace: '$1PRIVKEY' },
+      { // fingerprints: SHA256:base64 and legacy MD5 aa:bb:…
+        type: 'regex', re: /\b(?:SHA256|SHA1):[A-Za-z0-9+\/]{27,43}=?/g, replace: 'KEYFP',
+      },
+      { type: 'regex', re: /(?<![\w:])(?:MD5:)?(?:[0-9a-f]{2}:){15}[0-9a-f]{2}(?![\w:])/gi, replace: 'KEYFP' },
+    ];
+  }
+
   function builtinRules(o) {
     const r = [];
+    if (o.detectKeys) r.push(...keyRules()); // first: key data must not be picked apart by other detectors
     // scheme://user:pass@host
     if (o.detectUser || o.detectPass) {
       r.push({
@@ -234,15 +306,17 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     return r;
   }
   const currentBuiltinOpts = () => ({
-    detectIP: get('detectIP'), detectUser: get('detectUser'), detectPass: get('detectPass'),
+    detectIP: get('detectIP'), detectUser: get('detectUser'), detectPass: get('detectPass'), detectKeys: get('detectKeys'), dictDomains: get('dictDomains'),
     detectFQDN: get('detectFQDN'), fqdnDummy: get('fqdnDummy'), fqdnNumbered: get('fqdnNumbered'),
   });
 
-  // Keyword rules first (your exact values win), then built-in detectors, then regex rules
-  const orderRules = (dict, builtins) => [
-    ...dict.filter((r) => r.type === 'literal'),
+  // Keyword & domain rules first (your exact values win), then built-in detectors, then regex rules
+  // keyword & domain rules longest first, so john.doe@acme.com beats acme.com and intranet.acme beats ACME
+  const orderRules = (dict, builtins, domainsOn = true) => [
+    ...dict.filter((r) => r.type === 'literal' || (r.type === 'domain' && domainsOn))
+      .sort((a, b) => b.find.length - a.find.length),
     ...builtins,
-    ...dict.filter((r) => r.type !== 'literal'),
+    ...dict.filter((r) => r.type === 'regex'),
   ];
 
   let cache = { key: null, rules: [] };
@@ -250,12 +324,12 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     const text = get('rulesText');
     const opts = currentBuiltinOpts();
     const key = text + '\u0000' + JSON.stringify(opts);
-    if (key !== cache.key) cache = { key, rules: orderRules(parseRules(text).rules, builtinRules(opts)) };
+    if (key !== cache.key) cache = { key, rules: orderRules(parseRules(text).rules, builtinRules(opts), opts.dictDomains) };
     return cache.rules;
   }
 
   const labelOf = (repl) => (repl || '').replace(/\$(\d+|&|<\w+>)/g, '').trim() || '(deleted)';
-  const TOKENS = ['IPADDR', 'USERNAME', 'PASSWD'];
+  const TOKENS = ['IPADDR', 'USERNAME', 'PASSWD', 'PRIVKEY', 'SSLCERT', 'PUBKEY', 'PEMDATA', 'SSHKEY', 'KEYFP'];
   const countIn = (str, tok) => str.split(tok).length - 1;
 
   function sanitize(input, rules = getRules()) {
@@ -289,7 +363,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
         const m = text.match(r.re);
         if (m) {
           add(labelOf(r.replace), m.length);
-          text = text.replace(r.re, r.replace);
+          text = r.type === 'domain' ? text.replace(r.re, () => r.replace) : text.replace(r.re, r.replace);
         }
       }
     }
@@ -460,7 +534,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     input[type=text] { font: 12.5px ui-monospace, Menlo, Consolas, monospace; padding: 3px 7px; width: 170px;
       border: 1px solid #d1d5db; border-radius: 6px; color: #111827; background: #fff; }
     input[type=text]:focus, textarea:focus { outline: 2px solid #2563eb; outline-offset: -1px; }
-    .rules { height: 240px; }
+    .rules { height: 340px; }
     .err { color: #b91c1c; font-size: 12.5px; white-space: pre-wrap; min-height: 1em; margin-top: 4px; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .grid textarea { height: 110px; }
@@ -490,9 +564,11 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       return { input, el: h('label', {}, input, labelText) };
     };
     const notifyCb = cb('notify', 'Show red warning when something is replaced');
+    const domCb = cb('dictDomains', 'Domains in the dictionary (incl. subdomains)');
     const ipCb = cb('detectIP', 'IP addresses → IPADDR');
     const userCb = cb('detectUser', 'Usernames → USERNAME');
     const passCb = cb('detectPass', 'Passwords → PASSWD');
+    const keysCb = cb('detectKeys', 'SSH keys & certificates → SSHKEY / PRIVKEY / SSLCERT');
     const fqdnCb = cb('detectFQDN', 'Domains / FQDNs →');
     const fqdnIn = h('input', { type: 'text', value: get('fqdnDummy'), spellcheck: false, placeholder: 'example.com' });
     const numCb = cb('fqdnNumbered', 'Number different domains (host1, host2, …)');
@@ -503,8 +579,9 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       const errors = parsed.errors;
       const rules = orderRules(parsed.rules, builtinRules({
         detectIP: ipCb.input.checked, detectUser: userCb.input.checked, detectPass: passCb.input.checked,
+        detectKeys: keysCb.input.checked,
         detectFQDN: fqdnCb.input.checked, fqdnDummy: fqdnIn.value, fqdnNumbered: numCb.input.checked,
-      }));
+      }), domCb.input.checked);
       errBox.textContent = errors.join('\n');
       const { text, count } = sanitize(testIn.value, rules);
       testOut.value = text;
@@ -513,16 +590,18 @@ Acme Corp | Acme BV | ACME => [COMPANY]
         : `${parsed.rules.length} dictionary rule(s) + built-in detectors`;
     }
     rulesTa.addEventListener('input', refresh);
-    for (const c of [ipCb, userCb, passCb, fqdnCb, numCb]) c.input.addEventListener('change', refresh);
+    for (const c of [domCb, ipCb, userCb, passCb, keysCb, fqdnCb, numCb]) c.input.addEventListener('change', refresh);
     fqdnIn.addEventListener('input', refresh);
     testIn.addEventListener('input', refresh);
 
     function save() {
       set('rulesText', rulesTa.value);
       set('notify', notifyCb.input.checked);
+      set('dictDomains', domCb.input.checked);
       set('detectIP', ipCb.input.checked);
       set('detectUser', userCb.input.checked);
       set('detectPass', passCb.input.checked);
+      set('detectKeys', keysCb.input.checked);
       set('detectFQDN', fqdnCb.input.checked);
       set('fqdnDummy', fqdnIn.value.trim() || 'example.com');
       set('fqdnNumbered', numCb.input.checked);
@@ -535,9 +614,9 @@ Acme Corp | Acme BV | ACME => [COMPANY]
 
     const panel = h('div', { className: 'p' },
       h('h2', {}, '🧼 Paste Sanitizer'),
-      h('div', { className: 'opts' }, notifyCb.el, siteCb.el),
+      h('div', { className: 'opts' }, domCb.el, notifyCb.el, siteCb.el),
       h('h3', {}, 'Built-in detectors'),
-      h('div', { className: 'opts' }, ipCb.el, userCb.el, passCb.el),
+      h('div', { className: 'opts' }, ipCb.el, userCb.el, passCb.el, keysCb.el),
       h('div', { className: 'opts', style: 'margin-top:6px' },
         h('span', { className: 'inline' }, fqdnCb.el, fqdnIn), numCb.el),
       h('h3', {}, 'Dictionary'),
