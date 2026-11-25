@@ -4,7 +4,7 @@
 // @homepage     https://github.com/Justleen/paste_sanitizer
 // @homepageURL  https://github.com/Justleen/paste_sanitizer
 // @supportURL   https://github.com/Justleen/paste_sanitizer/issues
-// @version      1.8.1
+// @version      1.8.2
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
@@ -396,6 +396,8 @@ Acme Corp | Acme BV | ACME => [COMPANY]
 
   function onPaste(e) {
     if (!enabledHere() || !e.clipboardData) return;
+    // never touch pastes into our own settings panel (dictionary, Try it box, …)
+    if (e.composedPath().some((n) => n.localName === 'cps-sanitizer')) return;
 
     const original = e.clipboardData.getData('text/plain');
     if (!original) return;
