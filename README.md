@@ -1,4 +1,4 @@
-# paste_sanetizer
+# paste_sanitizer
 
 A Tampermonkey userscript that sanitizes text **when you paste it** in the browser. It replaces IP addresses, usernames, passwords and domain names with placeholders, plus anything in your own find/replace dictionary, and shows a red warning whenever something was changed.
 
@@ -37,13 +37,14 @@ One rule per line, top to bottom:
 
 ```
 # comment
-Acme Corp => [COMPANY]
+Acme Corp | Acme BV | ACME => [COMPANY]
 john.doe@acme.com => [ME]
 /(api[_-]?key\s*[:=]\s*)\S+/i => $1[REDACTED]
 secret-word =>
 ```
 
 - `find => replace` replaces every exact match.
+- `one | two | three => replace` lists several keywords for the same replacement. Spaces around `|` are ignored, longer keywords are tried first (so `Acme Corp` is replaced whole before `Acme`), and `\|` matches a literal `|`.
 - `/pattern/flags => replace` is a JavaScript regex, always replacing all matches. Use `$1`, `$2` for groups.
 - Empty right side deletes the match. `\n` and `\t` work in the replacement.
 - The **Try it** box in settings shows the result live while you edit.

@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Paste Sanitizer
 // @namespace    https://github.com/Justleen/paste_sanetizer
-// @homepageURL  https://github.com/Justleen/paste_sanetizer
-// @supportURL   https://github.com/Justleen/paste_sanetizer/issues
-// @version      1.4.0
+// @homepageURL  https://github.com/Justleen/paste_sanitizer
+// @supportURL   https://github.com/Justleen/paste_sanitizer/issues
+// @version      1.5.0
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
@@ -20,12 +20,13 @@
   // Defaults
   // ---------------------------------------------------------------------------
   const DEFAULT_RULES = `# One rule per line:   find => replace
+# Several keywords:     one | two | three => replace   (use \\| for a literal |)
 # Regex rule:           /pattern/flags => replace    ($1, $2 … for groups)
 # Empty right side deletes the match. \\n and \\t work in the replacement.
 # Lines starting with # are comments. Rules run top to bottom.
 
 john.doe@acme.com => [ME]
-Acme Corp => [COMPANY]
+Acme Corp | Acme BV | ACME => [COMPANY]
 /\\b(?!(?:USERNAME|PASSWD)@)[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)*\\.[a-z]{2,}\\b/i => [EMAIL]
 /\\b[A-Z]{2}\\d{2}[A-Z0-9]{10,30}\\b/ => [IBAN]
 /(api[_-]?key\\s*[:=]\\s*)\\S+/i => $1[REDACTED]
@@ -74,7 +75,14 @@ Acme Corp => [COMPANY]
 
       const lit = line.match(/^(.*?)\s+=>(?:\s(.*))?$/);
       if (lit && lit[1]) {
-        rules.push({ type: 'literal', find: lit[1], replace: unescape(lit[2]) });
+        // "a | b | c => x": split on unescaped |, longest first so "Acme Corp" beats "Acme"
+        const keys = lit[1].split(/(?<!\\)\|/)
+          .map((k) => k.trim().replace(/\\\|/g, '|'))
+          .filter(Boolean)
+          .sort((a, b) => b.length - a.length);
+        if (!keys.length) errors.push(`Line ${i + 1}: no keywords before "=>"`);
+        const replace = unescape(lit[2]);
+        for (const find of keys) rules.push({ type: 'literal', find, replace });
       } else {
         errors.push(`Line ${i + 1}: expected "find => replace"`);
       }
