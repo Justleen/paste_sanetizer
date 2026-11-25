@@ -4,7 +4,7 @@
 // @homepage     https://github.com/Justleen/paste_sanitizer
 // @homepageURL  https://github.com/Justleen/paste_sanitizer
 // @supportURL   https://github.com/Justleen/paste_sanitizer/issues
-// @version      1.8.3
+// @version      1.8.4
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
@@ -48,6 +48,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     detectKeys: true,
     dictDomains: true,
     disabledHosts: [],
+    debug: false,
   };
 
   const get = (k) => GM_getValue(k, DEFAULTS[k]);
@@ -393,24 +394,37 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     return false;
   }
 
+  // Debug logging (Tampermonkey menu → 🐞): shows in the page's browser console (F12)
+  const log = (...args) => {
+    if (get('debug')) console.info('%c[Paste Sanitizer]', 'color:#b91c1c;font-weight:bold', ...args);
+  };
+  const frameName = window.top === window ? 'top frame' : 'iframe';
+
   function onPaste(e) {
-    if (!enabledHere() || !e.clipboardData) return;
+    const target = e.composedPath()[0];
+    log(`paste event in ${frameName} of ${location.hostname}, target:`, target);
+    if (!enabledHere()) return log('skipped: switched off for this site');
+    if (!e.clipboardData) return log('skipped: event has no clipboard data');
     // never touch pastes into our own settings panel (dictionary, Try it box, …)
-    if (e.composedPath().some((n) => n.localName === 'cps-sanitizer')) return;
+    if (e.composedPath().some((n) => n.localName === 'cps-sanitizer')) return log('skipped: settings panel');
 
     const original = e.clipboardData.getData('text/plain');
-    if (!original) return;
+    if (!original) return log('skipped: clipboard has no plain text (types:', [...e.clipboardData.types], ')');
 
     const { text, count, details } = sanitize(original);
-    if (!count || text === original) return; // untouched → native paste
+    if (!count || text === original) return log('nothing to replace, normal paste'); // untouched → native paste
 
-    const target = e.composedPath()[0];
     e.preventDefault();
     e.stopImmediatePropagation(); // stop rich editors from inserting the original
-    if (insertText(target, text)) warn(count, details);
+    const inserted = insertText(target, text);
+    log(`${count} replacement(s)`, Object.fromEntries(details), inserted ? 'inserted' : 'INSERT FAILED');
+    if (inserted) warn(count, details);
   }
 
   window.addEventListener('paste', onPaste, true);
+  // runs after the page's own handlers: tells whether the page saw / handled the paste
+  window.addEventListener('paste', (e) => log(`page finished handling paste (defaultPrevented: ${e.defaultPrevented})`));
+  log(`loaded in ${frameName}: ${location.href}`);
 
   // ---------------------------------------------------------------------------
   // Tiny DOM helpers (no innerHTML → works on Trusted-Types sites)
@@ -647,6 +661,10 @@ Acme Corp | Acme BV | ACME => [COMPANY]
   // ---------------------------------------------------------------------------
   if (window.top === window) {
     GM_registerMenuCommand('⚙️ Edit dictionary & settings', openSettings);
+    GM_registerMenuCommand(get('debug') ? '🐞 Debug logging: ON (click to turn off)' : '🐞 Debug logging: off (click to turn on)', () => {
+      set('debug', !get('debug'));
+      location.reload();
+    });
     GM_registerMenuCommand(enabledHere() ? '⏸ Disable on this site' : '▶️ Enable on this site', () => {
       const hosts = new Set(get('disabledHosts'));
       hosts.has(host) ? hosts.delete(host) : hosts.add(host);
