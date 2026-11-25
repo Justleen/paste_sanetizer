@@ -14,7 +14,7 @@ Open the settings via the Tampermonkey menu → **⚙️ Edit dictionary & setti
 
 ## Built-in detectors
 
-These run first, then your dictionary. Each one can be switched off in settings.
+Each one can be switched off in settings. They run after your keyword rules and before your regex rules (see [Order](#order)).
 
 | Detector | Example in | Example out |
 |---|---|---|
@@ -38,7 +38,7 @@ One rule per line, top to bottom:
 ```
 # comment
 Acme Corp | Acme BV | ACME => [COMPANY]
-john.doe@acme.com => [ME]
+john.doe@acme.com | jdoe | John Doe => [ME]
 /(api[_-]?key\s*[:=]\s*)\S+/i => $1[REDACTED]
 secret-word =>
 ```
@@ -48,6 +48,14 @@ secret-word =>
 - `/pattern/flags => replace` is a JavaScript regex, always replacing all matches. Use `$1`, `$2` for groups.
 - Empty right side deletes the match. `\n` and `\t` work in the replacement.
 - The **Try it** box in settings shows the result live while you edit.
+
+### Order
+
+1. **Keyword rules** (`find => replace`, `a | b => x`): your exact values win, so `john.doe@acme.com => [ME]` is applied before the domain detector can touch the email address.
+2. **Built-in detectors**: IP, username, password, domain.
+3. **Regex rules** (`/pattern/ => x`): catch-alls like `[EMAIL]` mop up whatever is left.
+
+Within each group, rules run top to bottom.
 
 ## Behaviour
 
