@@ -31,7 +31,7 @@ Notes:
 
 - Usernames and passwords are only found **next to a label** (`password=`, `"user":`, `--password`, `-u`, `user:pass@`, `ssh user@`). A password on its own, like `hunter2`, can't be told apart from a normal word. Add known secrets to the dictionary instead.
 - Domain names in links are always replaced. Bare domains in text are only replaced when they end in a known TLD (`.com`, `.nl`, `.io`, `.local`, `.internal`, …), so code like `window.location` or `setup.py` stays untouched. Endings that double as file extensions (`.sh`, `.py`, `.md`, `.pl`, `.rs`, …) are skipped in plain text.
-- The dummy domain is configurable (default `example.com`). Different domains are numbered `host1`, `host2`, … so you can still see which lines belong together.
+- Domains become `example.com`, a name reserved for examples. Different domains are numbered `host1`, `host2`, … so you can still see which lines belong together.
 - Key and certificate blocks keep their `BEGIN`/`END` lines so you can still see what was pasted. The body becomes `PRIVKEY` (any private key, incl. OpenSSH, RSA, EC, PKCS#8 and PGP), `SSLCERT` (certificates and CRLs), `PUBKEY` or `PEMDATA` (anything else, e.g. a CSR). Blocks cut off before the `END` line and JSON-escaped blocks (`\n`) are handled too, as are PuTTY `.ppk` files.
 - Version numbers with four parts (`1.2.3.4`) look like IPs and will be replaced.
 
