@@ -3,7 +3,7 @@
 // @namespace    https://github.com/Justleen/paste_sanetizer
 // @homepageURL  https://github.com/Justleen/paste_sanitizer
 // @supportURL   https://github.com/Justleen/paste_sanitizer/issues
-// @version      1.7.0
+// @version      1.8.0
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
@@ -19,22 +19,33 @@
   // ---------------------------------------------------------------------------
   // Defaults
   // ---------------------------------------------------------------------------
-  const DEFAULT_RULES = `# One rule per line:   find => replace
-# Several keywords:     one | two | three => replace   (use \\| for a literal |)
-# Regex rule:           /pattern/flags => replace    ($1, $2 … for groups)
-# Empty right side deletes the match. \\n and \\t work in the replacement.
-# Lines starting with # are comments. Rules run top to bottom.
-# Order: keyword rules → built-in detectors (IP, user, password, domain) → regex rules.
+  const DEFAULT_RULES = `# Your own find & replace rules, one per line:
+#   find => replace                exact text, also inside longer words
+#   one | two | three => replace   several keywords, longest first (\\| = a literal |)
+#   /pattern/flags => replace      regex, replaces all matches ($1, $2 … for groups)
+#   find =>                        empty right side deletes the match
+# \\n and \\t work in the replacement. Lines starting with # are comments.
+# Order per paste: keyword rules → keys & certificates → internal domains →
+# username, password, domain and IP detectors → regex rules (each group top to bottom).
 
 john.doe@acme.com | jdoe | John Doe => [ME]
 Acme Corp | Acme BV | ACME => [COMPANY]
 /\\b(?!(?:USERNAME|PASSWD)@)[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)*\\.[a-z]{2,}\\b/i => [EMAIL]
-/\\b[A-Z]{2}\\d{2}[A-Z0-9]{10,30}\\b/ => [IBAN]
 /(api[_-]?key\\s*[:=]\\s*)\\S+/i => $1[REDACTED]
+`;
+
+  const DEFAULT_DOMAINS = `# One domain/host per line, subdomains included (acme.nl also hits git.acme.nl, jan@acme.nl).
+# Default → host1.example.com …  |  acme-corp.com => corp.example keeps the subdomain.
+# URLs are fine (only the host is used). A name without a dot matches that exact word.
+acme.nl
+acme-corp.com => corp.example
+https://wiki.intranet.acme/
+fileserver01
 `;
 
   const DEFAULTS = {
     rulesText: DEFAULT_RULES,
+    domainsText: DEFAULT_DOMAINS,
     notify: true,
     detectIP: true,
     detectFQDN: true,
@@ -161,23 +172,69 @@ Acme Corp | Acme BV | ACME => [COMPANY]
   function domainMapper(o) {
     const dummy = (o.fqdnDummy || 'example.com').trim().toLowerCase();
     const seen = new Map();
+    const done = new Set(); // names produced by the internal-domain list: leave alone
     const isDummy = (d) => d === dummy || d.endsWith('.' + dummy);
     return {
-      reset: () => seen.clear(),
+      reset: () => { seen.clear(); done.clear(); },
+      protect: (name) => done.add(name.toLowerCase()),
+      isProtected: (name) => done.has(name.toLowerCase().replace(/\.$/, '')),
       map(name) {
         const key = name.toLowerCase().replace(/\.$/, '');
-        if (isDummy(key) || key === 'localhost' || /^(?:USERNAME|PASSWD|IPADDR)$/i.test(key)) return null;
+        if (done.has(key) || isDummy(key) || key === 'localhost' || /^(?:USERNAME|PASSWD|IPADDR)$/i.test(key)) return null;
         if (!seen.has(key)) seen.set(key, o.fqdnNumbered ? `host${seen.size + 1}.${dummy}` : dummy);
         return seen.get(key);
       },
     };
   }
 
-  function fqdnRules(o) {
-    const dm = domainMapper(o);
+  // ---- Internal domains & hosts list -----------------------------------------
+  function parseDomains(text) {
+    const entries = [];
+    const errors = [];
+    (text || '').split(/\r?\n/).forEach((raw, i) => {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) return;
+      const m = line.match(/^(.*?)(?:\s+=>(?:\s+(.*))?)?$/);
+      const name = m[1].trim().toLowerCase()
+        .replace(/^[a-z][\w+.-]*:\/\//, '') // scheme
+        .replace(/^[^@\/]*@/, '')            // user:pass@
+        .replace(/[\/?#].*$/, '')            // path, query
+        .replace(/:\d+$/, '')                // port
+        .replace(/^\*\./, '')                // *.acme.nl
+        .replace(/\.$/, '');
+      if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(name)) {
+        errors.push(`Line ${i + 1}: "${m[1]}" is not a domain or host name`);
+        return;
+      }
+      entries.push({ name, replace: (m[2] || '').trim() || null });
+    });
+    entries.sort((a, b) => b.name.length - a.name.length); // corp.acme.nl before acme.nl
+    return { entries, errors };
+  }
+
+  function internalDomainRules(entries, dm) {
+    return entries.map(({ name, replace }) => {
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const hasDot = name.includes('.');
+      const sub = hasDot ? '((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)*)' : '()';
+      return {
+        type: 'fn', label: 'INTERNAL', reset: dm.reset,
+        re: new RegExp(`(?<![\\w.-])${sub}${esc}(?![\\w-]|\\.[a-z0-9])`, 'gi'),
+        fn: (m, subdomain) => {
+          if (dm.isProtected(m)) return m;
+          const out = replace ? (hasDot ? subdomain : '') + replace : dm.map(m);
+          if (!out) return m;
+          dm.protect(out);
+          return out;
+        },
+      };
+    });
+  }
+
+  function fqdnRules(o, dm) {
     return [
       { // host part of any URL: https://anything.here/...
-        type: 'fn', label: 'FQDN', reset: dm.reset, re: URL_HOST,
+        type: 'fn', label: 'FQDN', re: URL_HOST,
         fn: (m, scheme, userinfo, hostName) => {
           if (LOOKS_LIKE_IP.test(hostName) || !/[a-z]/i.test(hostName)) return m;
           const d = dm.map(hostName);
@@ -249,7 +306,10 @@ Acme Corp | Acme BV | ACME => [COMPANY]
 
   function builtinRules(o) {
     const r = [];
+    const dm = domainMapper(o); // shared, so a domain gets the same hostN everywhere in one paste
+    r.push({ type: 'fn', reset: dm.reset, re: /(?!)/g, fn: (m) => m }); // resets the mapper per paste
     if (o.detectKeys) r.push(...keyRules()); // first: key data must not be picked apart by other detectors
+    r.push(...internalDomainRules(o.domainEntries || [], dm));
     // scheme://user:pass@host
     if (o.detectUser || o.detectPass) {
       r.push({
@@ -279,7 +339,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
         fn: (m, pre) => pre + TOK.user + '@',
       });
     }
-    if (o.detectFQDN) r.push(...fqdnRules(o));
+    if (o.detectFQDN) r.push(...fqdnRules(o, dm));
     if (o.detectIP) {
       r.push({ type: 'regex', re: IPV6, replace: TOK.ip });
       r.push({ type: 'regex', re: IPV4, replace: TOK.ip });
@@ -289,6 +349,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
   const currentBuiltinOpts = () => ({
     detectIP: get('detectIP'), detectUser: get('detectUser'), detectPass: get('detectPass'), detectKeys: get('detectKeys'),
     detectFQDN: get('detectFQDN'), fqdnDummy: get('fqdnDummy'), fqdnNumbered: get('fqdnNumbered'),
+    domainEntries: parseDomains(get('domainsText')).entries,
   });
 
   // Keyword rules first (your exact values win), then built-in detectors, then regex rules
@@ -513,7 +574,8 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     input[type=text] { font: 12.5px ui-monospace, Menlo, Consolas, monospace; padding: 3px 7px; width: 170px;
       border: 1px solid #d1d5db; border-radius: 6px; color: #111827; background: #fff; }
     input[type=text]:focus, textarea:focus { outline: 2px solid #2563eb; outline-offset: -1px; }
-    .rules { height: 240px; }
+    .rules { height: 285px; }
+    .domains { height: 150px; }
     .err { color: #b91c1c; font-size: 12.5px; white-space: pre-wrap; min-height: 1em; margin-top: 4px; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .grid textarea { height: 110px; }
@@ -534,6 +596,8 @@ Acme Corp | Acme BV | ACME => [COMPANY]
 
     const rulesTa = h('textarea', { className: 'rules', spellcheck: false, value: get('rulesText') });
     const errBox = h('div', { className: 'err' });
+    const domainsTa = h('textarea', { className: 'domains', spellcheck: false, value: get('domainsText') });
+    const domErrBox = h('div', { className: 'err' });
     const testIn = h('textarea', { placeholder: 'Paste sample text here…', spellcheck: false });
     const testOut = h('textarea', { readOnly: true, placeholder: 'Sanitized result' });
     const testInfo = h('div', { className: 'muted' });
@@ -555,25 +619,30 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     function refresh() {
       const parsed = parseRules(rulesTa.value);
       const errors = parsed.errors;
+      const doms = parseDomains(domainsTa.value);
+      domErrBox.textContent = doms.errors.join('\n');
       const rules = orderRules(parsed.rules, builtinRules({
         detectIP: ipCb.input.checked, detectUser: userCb.input.checked, detectPass: passCb.input.checked,
         detectKeys: keysCb.input.checked,
         detectFQDN: fqdnCb.input.checked, fqdnDummy: fqdnIn.value, fqdnNumbered: numCb.input.checked,
+        domainEntries: doms.entries,
       }));
       errBox.textContent = errors.join('\n');
       const { text, count } = sanitize(testIn.value, rules);
       testOut.value = text;
       testInfo.textContent = testIn.value
         ? `${rules.length} rule(s) · ${count} replacement(s)`
-        : `${parsed.rules.length} dictionary rule(s) + built-in detectors`;
+        : `${doms.entries.length} internal domain(s) · ${parsed.rules.length} dictionary rule(s) + built-in detectors`;
     }
     rulesTa.addEventListener('input', refresh);
+    domainsTa.addEventListener('input', refresh);
     for (const c of [ipCb, userCb, passCb, keysCb, fqdnCb, numCb]) c.input.addEventListener('change', refresh);
     fqdnIn.addEventListener('input', refresh);
     testIn.addEventListener('input', refresh);
 
     function save() {
       set('rulesText', rulesTa.value);
+      set('domainsText', domainsTa.value);
       set('notify', notifyCb.input.checked);
       set('detectIP', ipCb.input.checked);
       set('detectUser', userCb.input.checked);
@@ -592,6 +661,9 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     const panel = h('div', { className: 'p' },
       h('h2', {}, '🧼 Paste Sanitizer'),
       h('div', { className: 'opts' }, notifyCb.el, siteCb.el),
+      h('h3', {}, 'Internal domains & hosts'),
+      domainsTa,
+      domErrBox,
       h('h3', {}, 'Built-in detectors'),
       h('div', { className: 'opts' }, ipCb.el, userCb.el, passCb.el, keysCb.el),
       h('div', { className: 'opts', style: 'margin-top:6px' },
@@ -603,7 +675,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       h('div', { className: 'grid' }, testIn, testOut),
       testInfo,
       h('div', { className: 'row' },
-        h('button', { onclick: () => { rulesTa.value = DEFAULT_RULES; refresh(); } }, 'Load examples'),
+        h('button', { onclick: () => { rulesTa.value = DEFAULT_RULES; domainsTa.value = DEFAULT_DOMAINS; refresh(); } }, 'Load examples'),
         h('button', { onclick: () => { navigator.clipboard?.writeText(testOut.value); } }, 'Copy result'),
         h('span', { className: 'spacer' }),
         h('button', { onclick: close }, 'Cancel'),

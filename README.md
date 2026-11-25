@@ -12,6 +12,32 @@ A Tampermonkey userscript that sanitizes text **when you paste it** in the brows
 
 Open the settings via the Tampermonkey menu → **⚙️ Edit dictionary & settings**.
 
+## Internal domains & hosts
+
+The list at the top of the settings panel is for your own domains, internal URLs and host names. Everything on it is always replaced, even when its ending isn't recognised by the domain detector (e.g. `.acme`) or the detector is switched off.
+
+```
+acme.nl
+acme-corp.com => corp.example
+https://wiki.intranet.acme/
+fileserver01
+```
+
+| Pasted | Becomes |
+|---|---|
+| `https://git.acme.nl/repo`, `jan@acme.nl` | `https://host1.example.com/repo`, `jan@host2.example.com` |
+| `ci.build.acme-corp.com:8080` | `ci.build.corp.example:8080` (explicit replacement keeps the subdomain) |
+| `wiki.intranet.acme/pages`, `WIKI.INTRANET.ACME` | `host3.example.com/pages` (case doesn't matter) |
+| `\\fileserver01\share` | `\\host4.example.com\share` |
+| `notacme.nl`, `fileserver012` | not matched by the list (the domain detector may still replace `notacme.nl`) |
+
+- One entry per line. Subdomains are included: `acme.nl` also matches `git.acme.nl` and `jan@acme.nl`.
+- Without `=>`, names get the dummy domain from the detector settings (`host1.example.com`, …), numbered consistently with the domain detector.
+- `domain => replacement` swaps only the domain part and keeps the subdomain.
+- URLs are accepted: only the host is used (scheme, login, port and path are ignored). `*.acme.nl` works like `acme.nl`.
+- A name without a dot (`fileserver01`) matches that exact word, in any case.
+- Since the repo is public, the examples are fake. Your real list lives only in Tampermonkey's storage.
+
 ## Built-in detectors
 
 Each one can be switched off in settings. They run after your keyword rules and before your regex rules (see [Order](#order)).
@@ -56,7 +82,7 @@ secret-word =>
 ### Order
 
 1. **Keyword rules** (`find => replace`, `a | b => x`): your exact values win, so `john.doe@acme.com => [ME]` is applied before the domain detector can touch the email address.
-2. **Built-in detectors**: keys and certificates first, then username, password, domain and IP.
+2. **Built-in detectors and your internal domains**: keys and certificates first, then your internal domains list, then username, password, domain and IP.
 3. **Regex rules** (`/pattern/ => x`): catch-alls like `[EMAIL]` mop up whatever is left.
 
 Within each group, rules run top to bottom.
