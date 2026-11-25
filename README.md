@@ -7,8 +7,8 @@ A Tampermonkey userscript that sanitizes text **when you paste it** in the brows
 ## Install
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/).
-2. Open **[paste-sanitizer.user.js](https://raw.githubusercontent.com/Justleen/paste_sanetizer/main/paste-sanitizer.user.js)**. Tampermonkey will offer to install it.
-3. Updates are picked up automatically from this repo (the `@updateURL` points at `main`).
+2. In Tampermonkey choose **Create a new script**, replace the template with the contents of [`paste-sanitizer.user.js`](paste-sanitizer.user.js) and save.
+3. To update, paste the new version over the old one the same way. The script never updates itself, and your dictionary and settings are kept.
 
 Open the settings via the Tampermonkey menu → **⚙️ Edit dictionary & settings**.
 

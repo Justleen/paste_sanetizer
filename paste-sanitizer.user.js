@@ -3,8 +3,6 @@
 // @namespace    https://github.com/Justleen/paste_sanetizer
 // @homepageURL  https://github.com/Justleen/paste_sanetizer
 // @supportURL   https://github.com/Justleen/paste_sanetizer/issues
-// @updateURL    https://raw.githubusercontent.com/Justleen/paste_sanetizer/main/paste-sanitizer.user.js
-// @downloadURL  https://raw.githubusercontent.com/Justleen/paste_sanetizer/main/paste-sanitizer.user.js
 // @version      1.4.0
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
