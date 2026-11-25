@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Paste Sanitizer
 // @namespace    https://github.com/Justleen/paste_sanetizer
+// @homepage     https://github.com/Justleen/paste_sanitizer
 // @homepageURL  https://github.com/Justleen/paste_sanitizer
 // @supportURL   https://github.com/Justleen/paste_sanitizer/issues
-// @version      1.8.0
+// @version      1.8.1
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
-// @all-frames   true
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
@@ -174,7 +174,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
 
   const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
   const BARE_FQDN = new RegExp(`(?<![\\w.-])((?:${LABEL}\\.)+([a-z]{2,63}))(?![\\w-]|\\.[a-z0-9])`, 'gi');
-  const URL_HOST = /\b([a-z][\w+.-]*:\/\/)((?:[^\s\/@?#]*@)?)(\[[^\]\s]+\]|[^\s\/:?#@\]]+)/gi;
+  const URL_HOST = /\b([a-z][\w+.-]*:\/\/)((?:[^\s/@?#]*@)?)(\[[^\]\s]+\]|[^\s/:?#@\]]+)/gi;
   const LOOKS_LIKE_IP = /^(?:\[.*\]|\d{1,3}(?:\.\d{1,3}){3})$/;
 
   function domainMapper(o) {
@@ -242,7 +242,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       { // truncated PEM block (BEGIN line + base64/header lines, no END)
         type: 'fn',
         // skips blocks already handled above; eats base64 lines and "Header: value" lines only
-        re: /-----BEGIN ([A-Z0-9 ]+)-----(?![ \t]*(?:\r?\n|\\n)(?:PRIVKEY|SSLCERT|PUBKEY|PEMDATA)\b)(?:[ \t]*(?:\r?\n|\\n)[ \t]*(?:[A-Za-z0-9+\/=]{4,}|[A-Za-z][\w-]*:[^\n\\]*))+/g,
+        re: /-----BEGIN ([A-Z0-9 ]+)-----(?![ \t]*(?:\r?\n|\\n)(?:PRIVKEY|SSLCERT|PUBKEY|PEMDATA)\b)(?:[ \t]*(?:\r?\n|\\n)[ \t]*(?:[A-Za-z0-9+/=]{4,}|[A-Za-z][\w-]*:[^\n\\]*))+/g,
         fn: (m, label) => {
           const nl = /\r?\n/.test(m) ? '\n' : '\\n';
           return `-----BEGIN ${label}-----${nl}${pemToken(label)}`;
@@ -255,12 +255,12 @@ Acme Corp | Acme BV | ACME => [COMPANY]
       },
       { // PuTTY .ppk key data
         type: 'fn',
-        re: /((?:Public|Private)-Lines:\s*\d+\r?\n)((?:[A-Za-z0-9+\/=]+(?:\r?\n|$))+)/g,
-        fn: (m, head, body) => head + (head.startsWith('Private') ? 'PRIVKEY' : 'SSHKEY') + '\n',
+        re: /((?:Public|Private)-Lines:\s*\d+\r?\n)((?:[A-Za-z0-9+/=]+(?:\r?\n|$))+)/g,
+        fn: (m, head) => head + (head.startsWith('Private') ? 'PRIVKEY' : 'SSHKEY') + '\n',
       },
       { type: 'regex', re: /\b(Private-MAC:\s*)[0-9a-f]+/gi, replace: '$1PRIVKEY' },
       { // fingerprints: SHA256:base64 and legacy MD5 aa:bb:…
-        type: 'regex', re: /\b(?:SHA256|SHA1):[A-Za-z0-9+\/]{27,43}=?/g, replace: 'KEYFP',
+        type: 'regex', re: /\b(?:SHA256|SHA1):[A-Za-z0-9+/]{27,43}=?/g, replace: 'KEYFP',
       },
       { type: 'regex', re: /(?<![\w:])(?:MD5:)?(?:[0-9a-f]{2}:){15}[0-9a-f]{2}(?![\w:])/gi, replace: 'KEYFP' },
     ];
@@ -273,7 +273,7 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     if (o.detectUser || o.detectPass) {
       r.push({
         type: 'fn',
-        re: /\b([a-z][\w+.-]*:\/\/)([^\s:@\/]+)(?::([^\s@\/]*))?@/gi,
+        re: /\b([a-z][\w+.-]*:\/\/)([^\s:@/]+)(?::([^\s@/]*))?@/gi,
         fn: (m, scheme, u, pw) =>
           scheme + (o.detectUser ? TOK.user : u) +
           (pw != null ? ':' + (o.detectPass ? TOK.pass : pw) : '') + '@',
