@@ -6,7 +6,7 @@ A Tampermonkey userscript that sanitizes text **when you paste it** in the brows
 
 ## Install
 
-1. Install [Tampermonkey](https://www.tampermonkey.net/).
+1. Install Tampermonkey: [Firefox add-on](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/), or see [tampermonkey.net](https://www.tampermonkey.net/) for other browsers.
 2. In Tampermonkey choose **Create a new script**, replace the template with the contents of [`paste-sanitizer.user.js`](paste-sanitizer.user.js) and save.
 3. To update, paste the new version over the old one the same way. The script never updates itself, and your dictionary and settings are kept.
 
@@ -53,5 +53,8 @@ secret-word =>
 - Only **paste** is touched. Copy and cut are untouched.
 - If nothing matches, the browser's normal paste runs and formatting is kept. If something is replaced, the cleaned text is inserted as plain text.
 - A red popup lists what was replaced (placeholders only, never the original values). It closes after 8 s; hover to keep it open.
+
+  ![Red warning after a paste](docs/warning.png)
+
 - Can be disabled per site from the Tampermonkey menu or settings.
 - Settings are stored in Tampermonkey's storage. Copy the dictionary out of the settings box to back it up.
