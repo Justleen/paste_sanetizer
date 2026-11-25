@@ -3,7 +3,7 @@
 // @namespace    https://github.com/Justleen/paste_sanetizer
 // @homepageURL  https://github.com/Justleen/paste_sanitizer
 // @supportURL   https://github.com/Justleen/paste_sanitizer/issues
-// @version      1.5.0
+// @version      1.6.0
 // @description  Find & replace text when you paste using your own dictionary (literal strings or regex).
 // @match        *://*/*
 // @run-at       document-start
@@ -24,8 +24,9 @@
 # Regex rule:           /pattern/flags => replace    ($1, $2 … for groups)
 # Empty right side deletes the match. \\n and \\t work in the replacement.
 # Lines starting with # are comments. Rules run top to bottom.
+# Order: keyword rules → built-in detectors (IP, user, password, domain) → regex rules.
 
-john.doe@acme.com => [ME]
+john.doe@acme.com | jdoe | John Doe => [ME]
 Acme Corp | Acme BV | ACME => [COMPANY]
 /\\b(?!(?:USERNAME|PASSWD)@)[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)*\\.[a-z]{2,}\\b/i => [EMAIL]
 /\\b[A-Z]{2}\\d{2}[A-Z0-9]{10,30}\\b/ => [IBAN]
@@ -237,12 +238,19 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     detectFQDN: get('detectFQDN'), fqdnDummy: get('fqdnDummy'), fqdnNumbered: get('fqdnNumbered'),
   });
 
+  // Keyword rules first (your exact values win), then built-in detectors, then regex rules
+  const orderRules = (dict, builtins) => [
+    ...dict.filter((r) => r.type === 'literal'),
+    ...builtins,
+    ...dict.filter((r) => r.type !== 'literal'),
+  ];
+
   let cache = { key: null, rules: [] };
   function getRules() {
     const text = get('rulesText');
     const opts = currentBuiltinOpts();
     const key = text + '\u0000' + JSON.stringify(opts);
-    if (key !== cache.key) cache = { key, rules: [...builtinRules(opts), ...parseRules(text).rules] };
+    if (key !== cache.key) cache = { key, rules: orderRules(parseRules(text).rules, builtinRules(opts)) };
     return cache.rules;
   }
 
@@ -493,10 +501,10 @@ Acme Corp | Acme BV | ACME => [COMPANY]
     function refresh() {
       const parsed = parseRules(rulesTa.value);
       const errors = parsed.errors;
-      const rules = [...builtinRules({
+      const rules = orderRules(parsed.rules, builtinRules({
         detectIP: ipCb.input.checked, detectUser: userCb.input.checked, detectPass: passCb.input.checked,
         detectFQDN: fqdnCb.input.checked, fqdnDummy: fqdnIn.value, fqdnNumbered: numCb.input.checked,
-      }), ...parsed.rules];
+      }));
       errBox.textContent = errors.join('\n');
       const { text, count } = sanitize(testIn.value, rules);
       testOut.value = text;
